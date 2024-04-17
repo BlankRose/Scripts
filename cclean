@@ -1,0 +1,176 @@
+#!/bin/bash
+# ############################################################################ #
+#          .-.                                                                 #
+#    __   /   \   __                                                           #
+#   (  `'.\   /.'`  )  cclean                                                  #
+#    '-._.(;;;)._.-'                                                           #
+#    .-'  ,`"`,  '-.                                                           #
+#   (__.-'/   \'-.__)  By: Rosie (https://github.com/BlankRose)                #
+#       //\   /        Last Updated: April 17, 2024 [07:24 pm]                 #
+#      ||  '-'                                                                 #
+# ############################################################################ #
+
+# ############### #
+#   USER MANUAL   #
+# ############### #
+
+Help() { echo "
+Simply cleans up some space on the session.
+CAUTION: Preferably use it when applications are closed.
+
+When a TARGET folder is specified, it will use this as the base
+folder for folders searches. It won't apply on explicitly listed
+folders and files. When omnited, it will look up in the user's
+home directory instead by default.
+
+SYNOPSIS:
+	cclean [options..] [target]
+	cclean [option]
+
+OPTIONS:
+	--git      | -g : Optimize all local git repos by calling 'git gc'
+	--docker   | -d : Clear and reset docker's state
+	--no-files | -n : Doesn't cleans up files, to allow cleaning of
+	                  only of docker or/and git respectively
+	--full     | -f : Toggles all the options mentionned above
+	--edit     | -e : Opens the runtime source code in vim
+	--help     | -h : Output this help message
+"; }
+
+# ##################### #
+#   ARGUMENTS HANDLER   #
+# ##################### #
+
+set -e
+if [ -z "$BASH" ]; then bash "$0" "$@"; exit $?; fi
+
+options=(); target="$HOME"; nofiles=;
+while [[ $# -gt 0 ]]; do
+	case $1 in
+	-e|--edit)
+		vim "$0"; exit $?;;
+	-h|--help)
+		Help; exit 0;;
+	-n|--no-files)
+		nofiles=1; shift;;
+	-g|--git)
+		options+=("g"); shift;;
+	-d|--docker)
+		options+=("d"); shift;;
+	-f|--full)
+		options+=("g" "d"); shift;;
+	-*|--*)
+		echo "cclean: $i: Invalid option"; exit 1;;
+	*) # [target]
+		if [ !-d "$i" ]; then
+			echo "cclean: $i: No such file or directory";
+			exit 1
+		fi;;
+	esac
+done
+
+if [ ! -z "$nofiles" ] && [ ${#options} -eq 0 ]; then
+	echo "cclean: Files cleaning has been disabled but no other options were passed, resulting in no tasks to do"
+	exit 1
+fi
+
+# ##################### #
+#   ELEMENTS TO CLEAN   #
+# ##################### #
+
+app="$HOME/.var/app"
+conf="$HOME/.config"
+
+# CAUTION: 'Clean' does removes all the contents of
+# folders rather than deleting the folder itself like
+# how 'Delete' does
+
+# Clears searched folders and explicitly listed ones
+clean_search=(
+	"cache" "Cache" "CacheStorage"
+	"crashlogs" "Crash Reports"
+)
+to_clean=(
+	"$HOME/.cache"
+)
+
+# Removes the undesired files
+delete_search=("*.swp" ".DS_Store")
+to_delete=(
+	"$HOME/.zcompdump"*
+	"$HOME/.validated_msg"
+	"$HOME/.xsession-errors"*
+	"$HOME/.home-size"
+	"$HOME/.Xauthority"
+	"$HOME/.wget-hsts"
+	"$HOME/.zsh_history"
+	"$HOME/.lesshst"
+)
+
+# ################ #
+#   SCRIPT TASKS   #
+# ################ #
+
+# Util function to print status
+state=""; elem=""
+function printState {
+	printf "\033[2K\r\033[33mƒ $state: %.*s..\033[0m" `echo $(tput cols) - ${#state} - 7 | bc` "$elem"
+}
+
+function printStep {
+	printf "\033[2K\r\033[33mƒ $state..\033[0m"
+}
+
+# Ignore if base routines when --no-files is given
+if [ -z "$nofiles" ]; then
+
+# TASK 1: Clean up target folders
+state="Searching targets"
+for e in "${clean_search[@]}"; do
+	elem="$e"; printState
+	mapfile -d $'\0' array < <(find "$target" -name "$e" -print0)
+	for i in "${array[@]}"; do to_clean+=("$i"); done
+done
+
+state="Clearing targets"
+for i in "${to_clean[@]}"; do
+	elem="$i"; printState
+	find "$i" ! -path "$i" 2>&1 | xargs -I {} rm -rf "{}" 2>&1
+done
+
+# TASK 2: Entirely remove targets
+state="Searching and deleting"
+for e in "${delete_search[@]}"; do
+	elem="$e"; printState
+	find "$target" -name "$e" 2>&1 | xargs -I {} rm -rf "{}" 2>&1
+done
+
+for i in "${to_delete[@]}"; do
+	elem="$i"; printState
+	rm -rf "$i"
+done
+
+# Cycle through given options
+fi; for o in "${options[@]}"; do
+
+# TASK 3: Clean up and reset docker states
+	if [ "$o" == "d" ] && command -v docker &> /dev/null; then
+		state="Cleaning up Docker"; printStep
+		docker rm -f `docker ps -aq > /dev/null 2>&1` > /dev/null 2>&1 | true
+		docker rmi -f `docker images -aq > /dev/null 2>&1` > /dev/null 2>&1 | true
+		docker volume rm -f `docker volume ls -q > /dev/null 2>&1` > /dev/null 2>&1 | true
+		docker system prune -af --volumes > /dev/null 2>&1 | true
+	fi
+
+# TASK 4: Optimize local git repositories
+	if [ "$o" == "g" ] && command -v git &> /dev/null; then
+		state="Optimizing local repositories"; printStep
+		mapfile -d $'\0' array < <(find "$target" -name ".git" -type d -print0)
+		for i in "${array[@]}"; do
+			git -C "$i" gc --quiet
+		done
+	fi
+done
+
+# DONE ! :)
+printf "\033[2K\r\033[1;32m√ Session has been succesfully cleaned\033[0m\n"

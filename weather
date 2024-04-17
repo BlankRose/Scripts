@@ -1,0 +1,44 @@
+#!/bin/bash
+# ############################################################################ #
+#          .-.                                                                 #
+#    __   /   \   __                                                           #
+#   (  `'.\   /.'`  )  weather                                                 #
+#    '-._.(;;;)._.-'                                                           #
+#    .-'  ,`"`,  '-.                                                           #
+#   (__.-'/   \'-.__)  By: Rosie (https://github.com/BlankRose)                #
+#       //\   /        Last Updated: April 17, 2024 [07:23 pm]                 #
+#      ||  '-'                                                                 #
+# ############################################################################ #
+
+language="en"
+location="mulhouse"
+provider="wttr.in"
+
+Help() { echo "
+Retrieves weather for a given location, from the weather provider: $provider
+Usage: $(basename $0) [location] [language]
+"; exit 1; }
+
+Failure() { echo "
+There were no information available for the location \"$location\"
+Please double check if the location exists!
+"; exit 2; }
+
+Bash() {
+    bash "$0" "$@"
+    exit $?
+}
+
+if [ -z "$BASH" ]; then Bash; fi
+if [ $# -gt 2 ];   then Help; fi
+
+if [ $# -ge 1 ]; then location="$1"; fi
+if [ $# -ge 2 ]; then language="$2"; fi
+
+location=$(echo "$location" | sed $'s/[ \t\v\f\r]/%20/g')
+url="https://$language.$provider/$location"
+status_code=$(curl "$url" -sw "%{http_code}" -o /dev/null)
+
+if [ ! "$status_code" = "200" ]; then Failure; fi
+curl -s "$url"
+exit $?
