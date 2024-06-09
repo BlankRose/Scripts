@@ -1,0 +1,184 @@
+#!/bin/bash
+# ############################################################################ #
+#          .-.                                                                 #
+#    __   /   \   __                                                           #
+#   (  `'.\   /.'`  )  cert-gen                                                #
+#    '-._.(;;;)._.-'                                                           #
+#    .-'  ,`"`,  '-.                                                           #
+#   (__.-'/   \'-.__)  By: Rosie (https://github.com/BlankRose)                #
+#       //\   /        Last Updated: June 09, 2024 [07:40 pm]                  #
+#      ||  '-'                                                                 #
+# ############################################################################ #
+
+
+# ############### #
+#   USER MANUAL   #
+# ############### #
+
+Help() { echo "
+Generates SSL certificates using Nginx, LetsEncrypt and Certbot,
+within an temporary dockerized environnement.
+
+User can configure what domain to generate certificates for,
+where to place them and what port to use for the temporary
+web server, within the script file (located at the CONFIGURATION
+section).
+
+SYNOPSIS:
+        cert-gen [option]
+
+OPTIONS:
+        --yes   | -y : Bypass user validation (used for scripts)
+        --input | -i : Prompt the user to fill configuration instead
+        --edit  | -e : Opens the runtime source code in vim
+        --help  | -h : Output this help message
+"; }
+
+
+# ################# #
+#   CONFIGURATION   #
+# ################# #
+
+port=5000
+target="$HOME/.crt"
+domain=
+subs=()
+
+
+# ############### #
+#   PROMPT MODE   #
+# ############### #
+
+UserInput() {
+    input=""
+    while [ -z "$input" ]; do
+        echo -n "$what"
+        read input
+    done
+}
+
+Prompt() {
+    what="Output directory (where to put certificates): ";              UserInput; port="$input"
+    what="Domain with top-domain (https://[exemple.com]): ";            UserInput; domain="$input"
+    what="Sub domains (seperated with space https://[sub].$domain): ";  UserInput; subs="$input"
+    what="Default domain (https://$domain)? [Y/n]: ";                   UserInput; empty_sub="$input"
+
+    subs=($subs)
+    if [ "$empty_sub" == "Y" ] || [ "$empty_sub" == "y" ]; then
+        subs+=("")
+    fi
+}
+
+
+# ################## #
+#   OPTION HANDLER   #
+# ################## #
+
+set -e
+
+if [ -z "$BASH" ]; then bash "$0" "$@"; exit $?; fi
+if [ $# -gt 1 ]; then echo "cert-gen: $2: Too many arguments"; exit 1; fi
+
+case "$1" in
+    -y|--yes)
+        bypass=1;;
+    -i|--input)
+        Prompt;;
+    -e|--edit)
+        vim "$0"; exit $?;;
+    -h|--help)
+        Help; exit 0;;
+    -*|--*)
+        echo "cert-gen: $1: Invalid option"; exit 1;;
+    *);;
+esac
+
+# ################## #
+#   DOMAIN PARSING   #
+# ################## #
+
+domain=$(echo "$domain" | xargs)
+if [ "$domain" == "" ] || [ "${#subs[@]}" -eq 0 ]; then
+    echo "No domain and/or sub domain provided in script's CONFIGURATION section"
+    echo "* TIP: Use \"\" for no sub-domain"
+    exit 1
+fi
+
+args=()
+for sub in "${subs[@]}"; do
+    sub=$(echo "$sub" | xargs)
+    if [ ! "$sub" == "" ]; then
+        args+=("$sub.$domain")
+    else
+        args+=("$domain")
+    fi
+done
+
+
+# ##################### #
+#   USER VERIFICATION   #
+# ##################### #
+
+if [ ! "$bypass" == 1 ]; then
+    echo "Are the domains valid?"
+    for i in "${args[@]}"; do
+        echo " - $i"
+    done
+    what="Please check before proceeding [Y/n] "; UserInput
+    if [ ! "$input" == "Y" ] && [ ! "$input" == "y" ]; then
+        echo "Cancelled.."
+        exit 0
+    fi
+fi
+echo "Starting.."
+
+
+# ################ #
+#   ACME PREPARE   #
+# ################ #
+
+tmp="/tmp/acme"
+mkdir -p "$target" "$tmp/challenges" "$tmp/logs"
+
+cat > "$tmp/nginx.conf" << EOF
+server {
+    listen 80;
+    server_name ${args[@]/#};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+}
+EOF
+
+docker run --rm -d --name nginx-certbot \
+        -v "$target:/etc/nginx/certs" \
+        -v "$tmp/challenges:/var/www/certbot" \
+        -v "$tmp/nginx.conf:/etc/nginx/conf.d/default.conf" \
+        -p "$port:80" \
+    nginx
+
+sleep 5
+
+
+# ##################### #
+#   CERTBOT EXECUTION   #
+# ##################### #
+
+set +e
+
+docker run --rm -it --name certbot \
+        -v "$target:/etc/letsencrypt" \
+        -v "$tmp/challenges:/var/www/certbot" \
+        -v "$tmp/logs:/var/log/letsencrypt" \
+    certbot/certbot certonly \
+        -v --agree-tos --register-unsafely-without-email \
+        --webroot -w /var/www/certbot "${args[@]/#/-d }"
+
+
+# ########### #
+#   CLEANUP   #
+# ########### #
+
+docker stop nginx-certbot
+echo "Done"
